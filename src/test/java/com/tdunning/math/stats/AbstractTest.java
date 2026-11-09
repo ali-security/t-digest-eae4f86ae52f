@@ -25,6 +25,7 @@ import com.carrotsearch.randomizedtesting.JUnit4MethodProvider;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.Listeners;
 import com.carrotsearch.randomizedtesting.annotations.TestMethodProviders;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakLingering;
 
 @Ignore
 @Listeners({
@@ -35,6 +36,9 @@ import com.carrotsearch.randomizedtesting.annotations.TestMethodProviders;
         JUnit4MethodProvider.class  // test methods annotated with @Test
 })
 @RunWith(value = com.carrotsearch.randomizedtesting.RandomizedRunner.class)
+// Executor workers can still be exiting just after awaitTermination() returns;
+// give them time to die instead of failing on a timing-dependent "thread leak".
+@ThreadLeakLingering(linger = 10000)
 /**
  * Base test case, all other test cases must inherit this one.
  */

@@ -1,12 +1,60 @@
 language: java
 sudo: false
-jdk:
-  - openjdk7
-  - oraclejdk8
+# Upstream legs were `jdk: [openjdk7, oraclejdk8]`; Travis no longer provisions
+# either on its current images, so each leg downloads its JDK instead
+# (Zulu 7 for the Java 7 leg, Temurin 8 for the Java 8 leg) plus Maven 3.8.8,
+# the newest Maven that still runs on Java 7.
+env:
+  - SEAL_JDK=7
+  - SEAL_JDK=8
 
 cache:
   directories:
     - '$HOME/.m2/repository'
 
+before_install:
+  - |
+    if [ "$SEAL_JDK" = "7" ]; then
+      JDK_URL=https://cdn.azul.com/zulu/bin/zulu7.56.0.11-ca-jdk7.0.352-linux_x64.tar.gz
+    else
+      JDK_URL=https://api.adoptium.net/v3/binary/latest/8/ga/linux/x64/jdk/hotspot/normal/eclipse
+    fi
+    mkdir -p /tmp/seal-jdk
+    curl -fsSL "$JDK_URL" | tar xz -C /tmp/seal-jdk --strip-components=1
+    export JAVA_HOME=/tmp/seal-jdk
+    export PATH="$JAVA_HOME/bin:$PATH"
+  - curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.8.8/binaries/apache-maven-3.8.8-bin.tar.gz | tar xz -C /tmp
+  - export PATH="/tmp/apache-maven-3.8.8/bin:$PATH"
+  - java -version
+  - mvn -version
+
 install: /bin/true
 
+# runSlowTests=true runs the project's slow tests too (testSizeControl,
+# MegaMergeTest, ScaleTest); MegaMergeTest holds 280k digests and needs a
+# bigger heap in the forked test JVM (junit4-maven-plugin's argLine).
+script: mvn test -B -DrunSlowTests=true -DargLine=-Xmx5g
+
+after_script:
+  # Travis archives job logs asynchronously; keep the job open (with a heartbeat
+  # so the 10-minute no-output watchdog never fires) until this job's public log
+  # contains the test command's exit line, so the harvested log is complete.
+  # after_script cannot change the build result.
+  - |
+    i=0
+    while [ $i -lt 1800 ]; do
+      curl -fsSL "https://api.travis-ci.com/v3/job/${TRAVIS_JOB_ID}/log.txt" -o /tmp/seal-job-log.txt 2>/dev/null
+      if grep -q 'Xmx5g" exited with [0-9]' /tmp/seal-job-log.txt 2>/dev/null; then
+        echo "log archived after ${i}s"
+        break
+      fi
+      echo "waiting for log archive... (${i}s)"
+      sleep 20
+      i=$((i+20))
+    done
+  # Re-print the runner's own skipped-test lines (with their @Ignore causes) and
+  # its totals at the end of the log, so they sit next to the build result.
+  - |
+    echo "===== junit4 skipped tests and totals (copied from the runner output above) ====="
+    grep -a -A1 -E '^IGNOR' /tmp/seal-job-log.txt | grep -a -v -E '^(--|\$|.*grep )'
+    grep -a -E '^\[INFO\] Tests summary:' /tmp/seal-job-log.txt
